@@ -37,7 +37,7 @@ test('results remain consistent across 30 and 60 fps; moisture slowly evaporates
   advance(a, 2, 30); advance(b, 2, 60);
   assert.ok(Math.abs(sum(a) - sum(b)) / sum(a) < .06);
   const wet = sum(a); advance(a, 10);
-  assert.ok(sum(a) < wet && sum(a) > wet * .75);
+  assert.ok(sum(a) < wet && sum(a) > wet * .5 && sum(a) < wet * .7);
 });
 test('density and rendered opacity stay bounded, including overlapping breaths', () => {
   const f = new Condensation(900, 600);
@@ -55,4 +55,26 @@ test('palm contact is oriented and elliptical, not a circular whole-screen erase
   assert.ok(at(f, 450, 340) < .1);
   assert.ok(at(f, 490, 300) > .79);
   assert.ok(at(f, 100, 100) > .79);
+});
+
+test('thick writing exposes a clear core while fog slowly fades around it', () => {
+  const f = new Condensation(900, 600); f.water.fill(.8);
+  f.wipe({x:200,y:300}, {x:650,y:300}, 28);
+  assert.ok(at(f,420,300) < .001);
+  assert.ok(at(f,420,315) < .001);
+  assert.ok(at(f,420,340) > .79);
+  const rgba = new Uint8ClampedArray(f.water.length * 4);
+  const index = Math.floor(100 / f.height * f.rows) * f.columns + Math.floor(100 / f.width * f.columns);
+  f.writeAlpha(rgba); const initial = rgba[index * 4 + 3];
+  advance(f,20); f.writeAlpha(rgba); const after20 = rgba[index * 4 + 3];
+  advance(f,20); f.writeAlpha(rgba); const after40 = rgba[index * 4 + 3];
+  assert.ok(after20 < initial * .8);
+  assert.ok(after40 < after20 * .6);
+});
+
+test('fog also fades over elapsed time when a background tab resumes', () => {
+  const f = new Condensation(900,600); f.water.fill(.8);
+  f.step(40);
+  assert.ok(at(f,100,100) < .12 && at(f,100,100) > .1);
+  assert.ok(f.water.every(Number.isFinite));
 });

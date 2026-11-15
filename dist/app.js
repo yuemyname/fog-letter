@@ -1,6 +1,6 @@
 import { Condensation } from './condensation.mjs';
 import { lipShape, MouthGesture } from './mouth-gesture.mjs';
-import { handMode, HandGesture } from './hand-gesture.mjs';
+import { handMode, HandGesture, writingPoint } from './hand-gesture.mjs';
 const $ = id => document.getElementById(id);
 const video = $('camera'), canvas = $('mist'), ctx = canvas.getContext('2d');
 const cursor = $('cursor'), pen = cursor.getContext('2d');
@@ -55,11 +55,11 @@ function addFog() {
   field.breathe(origin.x, origin.y, 1.5);
   demoClouds.push({delay: .24, x: origin.x, y: origin.y, strength: 1.4}, {delay: .5, x: origin.x, y: origin.y, strength: 1.1});
 }
-function erase(a, b, radius = 17) { field.wipe(a, b, radius); }
+function erase(a, b, radius = 25) { field.wipe(a, b, radius); }
 canvas.addEventListener('pointerdown', e => {
   if (!active) return;
   canvas.setPointerCapture(e.pointerId);
-  pointer = {id: e.pointerId, point: {x: e.clientX, y: e.clientY}, radius: e.pointerType === 'touch' ? 19 : 15};
+  pointer = {id: e.pointerId, point: {x: e.clientX, y: e.clientY}, radius: e.pointerType === 'touch' ? 27 : 25};
   erase(pointer.point, pointer.point, pointer.radius);
 });
 canvas.addEventListener('pointermove', e => {
@@ -83,7 +83,8 @@ function drawMirror() {
 function render(t) {
   requestAnimationFrame(render);
   if (t - lastDraw < 30) return;
-  const dt = Math.min(.05, Math.max(0, (t - lastDraw) / 1000)); lastDraw = t;
+  const elapsed = Math.max(0, (t - lastDraw) / 1000);
+  const dt = Math.min(.05, elapsed); lastDraw = t;
   if (!active) return;
   if (mouthEnabled && mouth && t - mouthSeen < 220 && mouthLevel > .06) {
     breathClock += dt;
@@ -96,7 +97,7 @@ function render(t) {
     if (cloud.delay <= 0) { field.breathe(cloud.x, cloud.y, cloud.strength); cloud.done = true; }
   }
   demoClouds = demoClouds.filter(c => !c.done);
-  field.step(dt);
+  field.step(elapsed);
   field.writeAlpha(alphaImage.data); maskCtx.putImageData(alphaImage, 0, 0);
   ctx.clearRect(0, 0, width, height);
   ctx.save();
@@ -235,24 +236,24 @@ function track(t) {
   try {
     const hand = handTracker.detectForVideo(video, t).landmarks?.[0];
     if (!hand) { lastHand = null; latestHand = null; handGesture.reset(); return; }
-    const mode = handGesture.update(handMode(hand, video.videoWidth, video.videoHeight), t);
+    const mode = handGesture.update(handMode(hand, video.videoWidth, video.videoHeight, handGesture.candidate === 'write'), t);
     if (mode === 'none') {
       lastHand = null; latestHand = null;
-      $('hint').textContent = '검지만 펴면 글씨 · 주먹을 쥐면 닦기';
+      $('hint').textContent = '엄지·검지를 붙이면 글씨 · 주먹을 쥐면 닦기';
       return;
     }
-    let points = hand.map(position), point = points[mode === 'erase' ? 9 : 8];
+    let points = hand.map(position), point = mode === 'erase' ? points[9] : writingPoint(points);
     const continuous = lastHand && lastHand.mode === mode && t - lastHand.time < 180 && distance(lastHand.point, point) < width * .22;
     const previous = continuous ? lastHand : null;
-    if (previous) { points = points.map((p, i) => mixPoint(previous.points[i], p, .65)); point = points[mode === 'erase' ? 9 : 8]; }
+    if (previous) { points = points.map((p, i) => mixPoint(previous.points[i], p, .65)); point = mode === 'erase' ? points[9] : writingPoint(points); }
     let center = null;
     if (mode === 'erase') center = wipeFist(points, previous);
     else {
-      const radius = Math.max(7, Math.min(13, distance(points[5], points[17]) * .08));
+      const radius = Math.max(20, Math.min(32, distance(points[5], points[17]) * .21));
       erase(previous ? previous.point : point, point, radius);
     }
     lastHand = {points, point, center, mode, time: t}; latestHand = lastHand;
-    $('hint').textContent = mode === 'erase' ? '주먹으로 유리를 닦고 있어요' : '검지 끝으로 글씨를 쓰고 있어요';
+    $('hint').textContent = mode === 'erase' ? '주먹으로 유리를 닦고 있어요' : '엄지·검지를 붙여 유리 위에 쓰고 있어요';
   } catch { handEnabled = false; setHands(); notice('손 추적이 중단되었어요. 화면을 직접 문질러 주세요.'); }
 }
 $('hands').onclick = enableHands;

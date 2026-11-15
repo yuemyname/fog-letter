@@ -24,11 +24,11 @@ export class Condensation {
     this.clouds.push({x, y, strength: clamp(strength, .1, 2), age: 0, seed: this.time * 1.7});
   }
   step(seconds) {
-    const dt = clamp(seconds, 0, .05);
+    const dt = clamp(seconds, 0, 3600);
     this.time += dt;
     const {columns: w, rows: h, water: a, next: b} = this;
-    const mix = dt * .32;
-    const evaporation = Math.exp(-dt / 75);
+    const mix = Math.min(.18, dt * .32);
+    const evaporation = Math.exp(-dt / 20);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const i = y * w + x;
@@ -92,7 +92,7 @@ export class Condensation {
       if (q > 1.12) continue;
       const i = y * this.columns + x;
       // A clear contact area with a feathered wet edge, without a hard brush outline.
-      const edge = clamp((1.07 - q) / .3);
+      const edge = clamp((1.04 - q) / .2);
       const contact = edge * edge * (3 - 2 * edge);
       this.water[i] *= 1 - contact * clamp(pressure);
     }

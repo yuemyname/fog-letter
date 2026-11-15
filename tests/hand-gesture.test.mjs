@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {handMode, HandGesture} from '../dist/hand-gesture.mjs';
+import {handMode, HandGesture, writingPoint} from '../dist/hand-gesture.mjs';
 function pose(extended, {angle = 0, width = 1280, height = 720, mirror = false} = {}) {
   const point = (x, y) => ({x: .5 + (x * Math.cos(angle) - y * Math.sin(angle)) / width * (mirror ? -1 : 1),
     y: .3 + (x * Math.sin(angle) + y * Math.cos(angle)) / height, z: 0});
@@ -13,8 +13,29 @@ function pose(extended, {angle = 0, width = 1280, height = 720, mirror = false} 
   });
   return hand;
 }
-test('only a pointed index selects fine writing', () => {
-  assert.equal(handMode(pose([true, false, false, false]), 1280, 720), 'write');
+function pinch(options = {}, gapRatio = .08) {
+  const hand = pose([true, false, false, false], options);
+  const width = options.width || 1280;
+  hand[4] = {...hand[8], z: (hand[8].z || 0) + 90 * gapRatio / width};
+  return hand;
+}
+test('pinched thumb and index write; a lone pointed index does nothing', () => {
+  assert.equal(handMode(pinch(), 1280, 720), 'write');
+  assert.equal(handMode(pose([true, false, false, false]), 1280, 720), 'none');
+});
+test('pinch hysteresis tolerates small jitter but stops after release', () => {
+  assert.equal(handMode(pinch({}, .27), 1280, 720, false), 'none');
+  assert.equal(handMode(pinch({}, .27), 1280, 720, true), 'write');
+  assert.equal(handMode(pinch({}, .4), 1280, 720, true), 'none');
+});
+test('contact point is between the two fingertips', () => {
+  const points = Array.from({length:21}, () => ({x:0,y:0}));
+  points[4] = {x:100,y:200}; points[8] = {x:110,y:210};
+  assert.deepEqual(writingPoint(points), {x:105,y:205});
+});
+test('a thumb touching a folded index inside a fist does not start writing', () => {
+  const hand = pose([false,false,false,false]); hand[4] = {...hand[8]};
+  assert.equal(handMode(hand, 1280, 720), 'erase');
 });
 test('a fully folded fist selects wiping', () => {
   assert.equal(handMode(pose([false, false, false, false]), 1280, 720), 'erase');
@@ -26,7 +47,7 @@ test('open palms, peace signs and other extended fingers do nothing', () => {
 test('writing and fist recognition survive rotation, mirroring and portrait video', () => {
   for (const angle of [-.8, 0, .8]) for (const mirror of [false, true]) {
     const options = {width: 720, height: 1280, angle, mirror};
-    assert.equal(handMode(pose([true,false,false,false], options), 720, 1280), 'write');
+    assert.equal(handMode(pinch(options), 720, 1280), 'write');
     assert.equal(handMode(pose([false,false,false,false], options), 720, 1280), 'erase');
   }
 });
