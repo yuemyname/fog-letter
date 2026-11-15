@@ -1,5 +1,6 @@
 import { Condensation } from './condensation.mjs';
 import { lipShape, MouthGesture } from './mouth-gesture.mjs';
+import { handMode, HandGesture } from './hand-gesture.mjs';
 const $ = id => document.getElementById(id);
 const video = $('camera'), canvas = $('mist'), ctx = canvas.getContext('2d');
 const cursor = $('cursor'), pen = cursor.getContext('2d');
@@ -9,6 +10,7 @@ let field, alphaImage, width, height, dpr, active = false, started = false;
 let stream, handTracker, faceTracker, visionFiles, visionModule, visionPromise;
 let mouthEnabled = false, mouthLevel = 0;
 const mouthGesture = new MouthGesture();
+const handGesture = new HandGesture();
 let handEnabled = false, lastHand = null, lastFrame = 0, lastFaceFrame = 0;
 let lastDraw = 0, noticeTimer, pointer = null, breathClock = 0, demoClouds = [];
 let mouth = null, mouthSeen = 0, latestHand = null;
@@ -42,7 +44,7 @@ function resize() {
     glassCtx.fillStyle = `rgba(255,255,255,${.04 + random() * .16})`; glassCtx.fill();
     if (r > 1) { glassCtx.beginPath(); glassCtx.arc(x + .3, y + .6, r * .55, 0, Math.PI); glassCtx.strokeStyle = '#52696d22'; glassCtx.lineWidth = .6; glassCtx.stroke(); }
   }
-  lastHand = null; pointer = null; mouth = null; mouthLevel = 0; mouthGesture.reset();
+  lastHand = null; handGesture.reset(); latestHand = null; pointer = null; mouth = null; mouthLevel = 0; mouthGesture.reset();
 }
 addEventListener('resize', resize); resize();
 function breathOrigin(now) {
@@ -104,9 +106,9 @@ function render(t) {
   ctx.drawImage(glass, 0, 0, width, height);
   ctx.globalCompositeOperation = 'destination-in';
   ctx.imageSmoothingEnabled = true; ctx.drawImage(mask, 0, 0, width, height); ctx.restore();
-  // Small, unobtrusive fingertip feedback. The palm has no circular eraser outline.
+  // Only writing shows a fingertip cursor; a fist uses the wider wiping contact.
   pen.clearRect(0, 0, width, height);
-  if (latestHand && t - latestHand.time < 160 && !latestHand.open) {
+  if (latestHand && t - latestHand.time < 160 && latestHand.mode === 'write') {
     pen.beginPath(); pen.arc(latestHand.point.x, latestHand.point.y, 3, 0, Math.PI * 2);
     pen.fillStyle = '#ffffff88'; pen.fill();
   }
@@ -192,24 +194,14 @@ async function enableFace() {
 function setHands() {
   $('hands').setAttribute('aria-pressed', String(handEnabled));
   $('hands').querySelector('span').textContent = handEnabled ? '손 추적 켜짐' : '손 추적 꺼짐';
-  lastHand = null; latestHand = null; pen.clearRect(0, 0, width, height);
+  lastHand = null; latestHand = null; handGesture.reset(); pen.clearRect(0, 0, width, height);
 }
-function wipePalm(points, previous) {
-  const span = distance(points[5], points[17]);
+function wipeFist(points, previous) {
   const center = {x: (points[0].x + points[5].x + points[9].x + points[13].x + points[17].x) / 5,
     y: (points[0].y + points[5].y + points[9].y + points[13].y + points[17].y) / 5};
-  const before = previous ? previous.center : center;
+  const span = distance(points[5], points[17]);
   const angle = Math.atan2(points[9].y - points[0].y, points[9].x - points[0].x);
-  // Palm contact follows its orientation; individual fingers leave their own trails.
-  field.wipe(before, center, Math.max(20, Math.min(110, span * .58)), .83, angle);
-  for (const chain of [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]]) {
-    const radius = Math.max(5, Math.min(21, span * .115));
-    for (let j = 0; j < chain.length; j++) {
-      const index = chain[j];
-      field.wipe(previous ? previous.points[index] : points[index], points[index], radius);
-      if (j > 0) field.wipe(points[chain[j - 1]], points[index], radius);
-    }
-  }
+  field.wipe(previous ? previous.center : center, center, Math.max(28, Math.min(95, span * .65)), .9, angle);
   return center;
 }
 function track(t) {
@@ -242,19 +234,25 @@ function track(t) {
   if (!handEnabled || !handTracker) return;
   try {
     const hand = handTracker.detectForVideo(video, t).landmarks?.[0];
-    if (!hand) { lastHand = null; latestHand = null; return; }
-    const extended = [8, 12, 16, 20].map(tip => distance(hand[tip], hand[0]) > distance(hand[tip - 2], hand[0]) * 1.12);
-    const open = extended.every(Boolean), writing = extended[0] && !extended[1] && !extended[2];
-    if (!open && !writing) { lastHand = null; latestHand = null; return; }
-    let points = hand.map(position), point = points[open ? 9 : 8];
-    const continuous = lastHand && lastHand.open === open && t - lastHand.time < 180 && distance(lastHand.point, point) < width * .22;
+    if (!hand) { lastHand = null; latestHand = null; handGesture.reset(); return; }
+    const mode = handGesture.update(handMode(hand, video.videoWidth, video.videoHeight), t);
+    if (mode === 'none') {
+      lastHand = null; latestHand = null;
+      $('hint').textContent = '검지만 펴면 글씨 · 주먹을 쥐면 닦기';
+      return;
+    }
+    let points = hand.map(position), point = points[mode === 'erase' ? 9 : 8];
+    const continuous = lastHand && lastHand.mode === mode && t - lastHand.time < 180 && distance(lastHand.point, point) < width * .22;
     const previous = continuous ? lastHand : null;
-    if (previous) { points = points.map((p, i) => mixPoint(previous.points[i], p, .65)); point = points[open ? 9 : 8]; }
+    if (previous) { points = points.map((p, i) => mixPoint(previous.points[i], p, .65)); point = points[mode === 'erase' ? 9 : 8]; }
     let center = null;
-    if (open) center = wipePalm(points, previous);
-    else { const radius = Math.max(9, Math.min(19, distance(points[5], points[17]) * .105)); erase(previous ? previous.point : point, point, radius); }
-    lastHand = {points, point, center, open, time: t}; latestHand = lastHand;
-    $('hint').textContent = open ? '손바닥으로 유리를 닦고 있어요' : '검지로 마음을 쓰고 있어요';
+    if (mode === 'erase') center = wipeFist(points, previous);
+    else {
+      const radius = Math.max(7, Math.min(13, distance(points[5], points[17]) * .08));
+      erase(previous ? previous.point : point, point, radius);
+    }
+    lastHand = {points, point, center, mode, time: t}; latestHand = lastHand;
+    $('hint').textContent = mode === 'erase' ? '주먹으로 유리를 닦고 있어요' : '검지 끝으로 글씨를 쓰고 있어요';
   } catch { handEnabled = false; setHands(); notice('손 추적이 중단되었어요. 화면을 직접 문질러 주세요.'); }
 }
 $('hands').onclick = enableHands;
