@@ -7,7 +7,7 @@ function jointAngle(a, b, c) {
   return Math.acos(Math.max(-1, Math.min(1, (u.x * v.x + u.y * v.y + u.z * v.z) / length))) * 180 / Math.PI;
 }
 // Ambiguous poses do nothing. Only a fully folded fist may use the wide eraser.
-export function handMode(landmarks, width, height, wasPinching = false) {
+export function handMode(landmarks, width, height, wasPinching = false, recognition = null) {
   if (landmarks?.length !== 21 || !width || !height) return 'none';
   const points = landmarks.map(p => ({x: p.x * width, y: p.y * height, z: (p.z || 0) * width}));
   if (points.some(p => !Number.isFinite(p.x + p.y + p.z))) return 'none';
@@ -27,8 +27,11 @@ export function handMode(landmarks, width, height, wasPinching = false) {
   // A curved index is valid. Reject only the clustered fingertips of a closed fist.
   const indexSeparate = screenDistance(points[8], points[12]) / span > .42;
   const fist = fingers.every(f => f.folded);
-  if (touching && (!fist || indexSeparate)) return 'write';
-  if (fingers.every(f => f.folded)) return 'erase';
+  // Use the trained gesture classifier for fists. A noisy landmark pose alone must not erase.
+  const recognizedFist = recognition?.categoryName === 'Closed_Fist' && recognition.score >= .75;
+  if (recognizedFist) return 'erase';
+  if (touching && (recognition ? true : (!fist || indexSeparate))) return 'write';
+  if (!recognition && fist) return 'erase';
   return 'none';
 }
 // Use the actual contact between thumb and index, rather than the index alone.
@@ -37,11 +40,14 @@ export function writingPoint(points) {
 }
 export class HandGesture {
   constructor() { this.reset(); }
-  reset() { this.candidate = 'none'; this.since = 0; }
+  reset() { this.candidate = 'none'; this.since = 0; this.lastWriting = -Infinity; }
   update(mode, time) {
-    if (mode === 'none') { this.reset(); return 'none'; }
+    if (mode === 'none') { this.candidate = 'none'; this.since = 0; return 'none'; }
     if (mode !== this.candidate) { this.candidate = mode; this.since = time; return 'none'; }
-    // A deliberate fist must settle longer than a writing gesture.
-    return time - this.since >= (mode === 'erase' ? 180 : 80) ? mode : 'none';
+    // Protect a just-finished stroke while the fingers change pose.
+    if (mode === 'erase' && time - this.lastWriting < 600) return 'none';
+    if (time - this.since < (mode === 'erase' ? 350 : 80)) return 'none';
+    if (mode === 'write') this.lastWriting = time;
+    return mode;
   }
 }

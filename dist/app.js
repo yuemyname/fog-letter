@@ -12,7 +12,7 @@ let mouthEnabled = false, mouthLevel = 0;
 const mouthGesture = new MouthGesture();
 const handGesture = new HandGesture();
 let handEnabled = false, lastHand = null, lastFrame = 0, lastFaceFrame = 0;
-let lastDraw = 0, noticeTimer, pointer = null, breathClock = 0, demoClouds = [];
+let lastDraw = 0, noticeTimer, pointer = null, breathClock = 0, demoClouds = [], lastInteraction = -Infinity;
 let mouth = null, mouthSeen = 0, latestHand = null, handPreview = null;
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const mixPoint = (a, b, k) => ({x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k});
@@ -55,7 +55,10 @@ function addFog() {
   field.breathe(origin.x, origin.y, 1.5);
   demoClouds.push({delay: .24, x: origin.x, y: origin.y, strength: 1.4}, {delay: .5, x: origin.x, y: origin.y, strength: 1.1});
 }
-function erase(a, b, radius = 25) { field.wipe(a, b, radius); }
+function beginInteraction() {
+  lastInteraction = performance.now(); field.clouds.length = 0; breathClock = 0;
+}
+function erase(a, b, radius = 25) { beginInteraction(); field.wipe(a, b, radius); }
 canvas.addEventListener('pointerdown', e => {
   if (!active) return;
   canvas.setPointerCapture(e.pointerId);
@@ -86,7 +89,7 @@ function render(t) {
   const elapsed = Math.max(0, (t - lastDraw) / 1000);
   const dt = Math.min(.05, elapsed); lastDraw = t;
   if (!active) return;
-  if (mouthEnabled && mouth && t - mouthSeen < 220 && mouthLevel > .06) {
+  if (mouthEnabled && mouth && t - mouthSeen < 220 && mouthLevel > .06 && t - lastInteraction > 5000) {
     breathClock += dt;
     if (breathClock > .115) {
       field.breathe(mouth.x, mouth.y, mouthLevel * 1.4); breathClock = 0;
@@ -110,7 +113,14 @@ function render(t) {
   // Only writing shows a fingertip cursor; a fist uses the wider wiping contact.
   pen.clearRect(0, 0, width, height);
   if (handEnabled && handPreview && t - handPreview.time < 200) {
-    const thumb = handPreview.points[4], index = handPreview.points[8];
+    const pts = handPreview.points;
+    pen.strokeStyle = '#ffffff33'; pen.lineWidth = 1;
+    for (const chain of [[0,1,2,3,4],[0,5,6,7,8],[5,9,10,11,12],[9,13,14,15,16],[13,17,18,19,20],[17,0]]) {
+      pen.beginPath(); pen.moveTo(pts[chain[0]].x, pts[chain[0]].y);
+      for (const index of chain.slice(1)) pen.lineTo(pts[index].x, pts[index].y);
+      pen.stroke();
+    }
+    const thumb = pts[4], index = pts[8];
     const writing = latestHand?.mode === 'write' && t - latestHand.time < 160;
     pen.strokeStyle = writing ? '#b9f9d5dd' : '#ffffffaa'; pen.lineWidth = 1.5;
     pen.beginPath(); pen.moveTo(thumb.x, thumb.y); pen.lineTo(index.x, index.y); pen.stroke();
@@ -130,7 +140,7 @@ $('start').onclick = async () => {
   try {
     stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'user', width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
     video.srcObject = stream; await video.play(); enter(); $('ambient').style.display = 'none';
-    // The mirror starts clear: only exhalation deposits new condensation.
+    // Fog requires a sustained blowing mouth shape; face presence alone does nothing.
     requestAnimationFrame(track);
     void enableFace(); void enableHands();
   } catch {
@@ -145,7 +155,7 @@ $('help').onclick = () => $('guide').hidden = !$('guide').hidden;
 $('closeGuide').onclick = () => $('guide').hidden = true;
 function setMouthLabel() {
   $('mouth').setAttribute('aria-pressed', String(mouthEnabled));
-  $('mouth').querySelector('span').textContent = mouthEnabled ? '입모양 켜짐' : '입모양 꺼짐';
+  $('mouth').querySelector('span').textContent = mouthEnabled ? '입김 감지 켜짐' : '입김 감지 꺼짐';
 }
 $('mouth').onclick = async () => {
   if (!stream) { notice('입모양 감지는 카메라 모드에서 사용할 수 있어요.'); return; }
@@ -172,9 +182,9 @@ async function enableHands() {
   $('handStatus').textContent = '손 인식 모델을 불러오고 있어요';
   try {
     await getVision();
-    handTracker = await visionModule.HandLandmarker.createFromOptions(visionFiles, {
-      baseOptions: {modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},
-      runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: .4, minHandPresenceConfidence: .4, minTrackingConfidence: .4
+    handTracker = await visionModule.GestureRecognizer.createFromOptions(visionFiles, {
+      baseOptions: {modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task'},
+      runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: .5, minHandPresenceConfidence: .55, minTrackingConfidence: .5
     });
     handEnabled = true; setHands();
   } catch { notice('손 추적을 불러오지 못했어요. 화면을 직접 문질러 사용할 수 있어요.'); $('hands').querySelector('span').textContent = '손 추적 다시 시도'; $('handStatus').textContent = '손 추적을 불러오지 못했어요 · 다시 시도해 주세요'; }
@@ -191,7 +201,7 @@ async function enableFace() {
       minFaceDetectionConfidence: .55, minFacePresenceConfidence: .55, minTrackingConfidence: .55
     });
     mouthEnabled = true; setMouthLabel();
-    $('hint').textContent = '입술을 오므려 후— 하는 모양을 해보세요';
+    $('hint').textContent = '입술을 오므려 후— 하는 모양을 잠시 유지해주세요';
   } catch {
     mouthEnabled = false; mouthLevel = 0; mouth = null; mouthGesture.reset();
     $('mouth').querySelector('span').textContent = '입모양 다시 시도';
@@ -228,7 +238,7 @@ function track(t) {
         const next = position(shape.center);
         mouth = mouth && t - mouthSeen < 220 ? mixPoint(mouth, next, .75) : next;
         mouthSeen = t;
-        if (mouthLevel > .1) $('hint').textContent = '입 주변에서 김이 퍼지고 있어요';
+        if (mouthLevel > .1) $('hint').textContent = t - lastInteraction <= 5000 ? '글씨가 보이도록 김 생성을 잠시 멈췄어요' : '입 주변에서 김이 퍼지고 있어요';
       } else {
         mouth = null; mouthLevel = 0; breathClock = 0;
         $('hint').textContent = '카메라에 얼굴과 입이 보이게 해주세요';
@@ -241,17 +251,19 @@ function track(t) {
   }
   if (!handEnabled || !handTracker) return;
   try {
-    const hand = handTracker.detectForVideo(video, t).landmarks?.[0];
+    const result = handTracker.recognizeForVideo(video, t);
+    const hand = result.landmarks?.[0];
+    const recognition = result.gestures?.[0]?.[0] || {categoryName: 'None', score: 0};
     if (!hand) {
       lastHand = null; latestHand = null; handPreview = null; handGesture.reset();
       $('handStatus').textContent = '손이 보이지 않아요 · 손 전체를 카메라에 보여주세요';
       return;
     }
     handPreview = {points: hand.map(position), time: t};
-    const mode = handGesture.update(handMode(hand, video.videoWidth, video.videoHeight, handGesture.candidate === 'write'), t);
+    const mode = handGesture.update(handMode(hand, video.videoWidth, video.videoHeight, handGesture.candidate === 'write', recognition), t);
     if (mode === 'none') {
       lastHand = null; latestHand = null;
-      $('handStatus').textContent = handGesture.candidate === 'write' ? '집기 인식 중…' : '손 인식됨 · 엄지와 검지 끝을 붙여주세요';
+      $('handStatus').textContent = handGesture.candidate === 'write' ? '집기 인식 중…' : handGesture.candidate === 'erase' ? '주먹 인식 중 · 잠시 유지해주세요' : '손 인식됨 · 엄지와 검지 끝을 붙여주세요';
       return;
     }
     let points = hand.map(position), point = mode === 'erase' ? points[9] : writingPoint(points);
@@ -259,7 +271,7 @@ function track(t) {
     const previous = continuous ? lastHand : null;
     if (previous) { points = points.map((p, i) => mixPoint(previous.points[i], p, .65)); point = mode === 'erase' ? points[9] : writingPoint(points); }
     let center = null;
-    if (mode === 'erase') center = wipeFist(points, previous);
+    if (mode === 'erase') { beginInteraction(); center = wipeFist(points, previous); }
     else {
       const radius = Math.max(20, Math.min(32, distance(points[5], points[17]) * .21));
       erase(previous ? previous.point : point, point, radius);

@@ -64,9 +64,10 @@ test('brief accidental fists do not erase and changing modes stops immediately',
   assert.equal(gesture.update('write', 400), 'none');
   assert.equal(gesture.update('write', 500), 'write');
   assert.equal(gesture.update('erase', 600), 'none');
-  assert.equal(gesture.update('erase', 800), 'erase');
-  assert.equal(gesture.update('none', 850), 'none');
-  assert.equal(gesture.update('erase', 900), 'none');
+  assert.equal(gesture.update('erase', 800), 'none');
+  assert.equal(gesture.update('erase', 1100), 'erase');
+  assert.equal(gesture.update('none', 1150), 'none');
+  assert.equal(gesture.update('erase', 1200), 'none');
 });
 
 test('a naturally bent pinching index near the palm is accepted', () => {
@@ -77,4 +78,15 @@ test('a naturally bent pinching index near the palm is accepted', () => {
 test('overlapping fingertips still pinch with noisy depth estimates', () => {
   const hand = pinch(); hand[4].z = .12;
   assert.equal(handMode(hand,1280,720), 'write');
+});
+
+test('learned fist classification is required for automatic wiping in the camera app', () => {
+  const fist = pose([false,false,false,false]);
+  assert.equal(handMode(fist,1280,720,false,{categoryName:'None',score:.9}), 'none');
+  assert.equal(handMode(fist,1280,720,false,{categoryName:'Closed_Fist',score:.5}), 'none');
+  assert.equal(handMode(fist,1280,720,false,{categoryName:'Closed_Fist',score:.95}), 'erase');
+});
+test('learned non-fist recognition lets a bent pinch write without a rigid index pose', () => {
+  const hand = pose([false,false,false,false]); hand[4] = {...hand[8]};
+  assert.equal(handMode(hand,1280,720,false,{categoryName:'None',score:.9}), 'write');
 });
