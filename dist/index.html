@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#202925"><title>숨결 — Fog Letter</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<video id="camera" autoplay muted playsinline></video><canvas id="mist"></canvas><canvas id="cursor"></canvas>
+<div class="ambient" id="ambient"></div>
+<header><a class="brand" href="./">숨결<span>A LITTLE FOG, A LITTLE FEELING</span></a><button id="help" class="round" aria-label="사용 방법">?</button></header>
+<main id="welcome"><div class="eyebrow">AN INTERACTIVE MIRROR</div><h1>잠깐의 숨이,<br>편지가 되는 곳.</h1><p>입김으로 김을 만들고,<br>손끝으로 마음을 남겨보세요.</p><button id="start" class="primary">거울 열기 <span>↗</span></button><button id="demo" class="text-button">카메라 없이 먼저 해보기</button><small>카메라·마이크는 이 기기 안에서만 사용해요.</small></main>
+<aside id="guide" hidden><button id="closeGuide" class="round" aria-label="설명 닫기">×</button><h2>유리 위에 남기는 마음</h2><p>01 · 마이크 가까이에서 후— 불면 김이 서려요.</p><p>02 · 검지만 펴서 움직이면 글씨가 써져요.</p><p>03 · 손바닥을 펴서 움직이면 넓게 닦여요.</p><p>화면을 손가락이나 마우스로 문질러도 좋아요.</p><small>입김은 소리로 감지하므로 주변 소음에도 반응할 수 있어요.</small></aside>
+<div id="status" role="status" aria-live="polite"></div>
+<footer id="controls" hidden><div class="hint" id="hint">후— 하고 불어보세요</div><div class="toolbar"><button id="fog" aria-label="김 서리기">☁ <span>김 서리기</span></button><i></i><button id="wipe">↝ <span>모두 닦기</span></button><i></i><button id="hands" aria-pressed="false">✋ <span>손 추적 켜기</span></button><i></i><button id="sound" aria-pressed="false">◉ <span>입김 감지</span></button></div><div class="bottom-note">WRITE SOMETHING THAT ONLY LASTS A MOMENT</div></footer>
+<script type="module" src="app.js"></script>
+</body></html>
