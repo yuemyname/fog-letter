@@ -1,13 +1,16 @@
-import { Condensation, BreathEnvelope } from './condensation.mjs';
+import { Condensation } from './condensation.mjs';
+import { lipShape, MouthGesture } from './mouth-gesture.mjs';
 const $ = id => document.getElementById(id);
 const video = $('camera'), canvas = $('mist'), ctx = canvas.getContext('2d');
 const cursor = $('cursor'), pen = cursor.getContext('2d');
 const mask = document.createElement('canvas'), maskCtx = mask.getContext('2d');
 const glass = document.createElement('canvas'), glassCtx = glass.getContext('2d');
 let field, alphaImage, width, height, dpr, active = false, started = false;
-let stream, micStream, audioContext, handTracker, faceTracker, visionFiles, visionModule;
+let stream, handTracker, faceTracker, visionFiles, visionModule, visionPromise;
+let mouthEnabled = false, mouthLevel = 0;
+const mouthGesture = new MouthGesture();
 let handEnabled = false, lastHand = null, lastFrame = 0, lastFaceFrame = 0;
-let lastDraw = 0, noticeTimer, pointer = null, audioLevel = 0, breathClock = 0, demoClouds = [];
+let lastDraw = 0, noticeTimer, pointer = null, breathClock = 0, demoClouds = [];
 let mouth = null, mouthSeen = 0, latestHand = null;
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const mixPoint = (a, b, k) => ({x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k});
@@ -39,7 +42,7 @@ function resize() {
     glassCtx.fillStyle = `rgba(255,255,255,${.04 + random() * .16})`; glassCtx.fill();
     if (r > 1) { glassCtx.beginPath(); glassCtx.arc(x + .3, y + .6, r * .55, 0, Math.PI); glassCtx.strokeStyle = '#52696d22'; glassCtx.lineWidth = .6; glassCtx.stroke(); }
   }
-  lastHand = null; pointer = null;
+  lastHand = null; pointer = null; mouth = null; mouthLevel = 0; mouthGesture.reset();
 }
 addEventListener('resize', resize); resize();
 function breathOrigin(now) {
@@ -80,11 +83,10 @@ function render(t) {
   if (t - lastDraw < 30) return;
   const dt = Math.min(.05, Math.max(0, (t - lastDraw) / 1000)); lastDraw = t;
   if (!active) return;
-  if (audioLevel > .06 && audioContext?.state === 'running') {
+  if (mouthEnabled && mouth && t - mouthSeen < 220 && mouthLevel > .06) {
     breathClock += dt;
     if (breathClock > .115) {
-      const origin = breathOrigin(t);
-      field.breathe(origin.x, origin.y, audioLevel * 1.4); breathClock = 0;
+      field.breathe(mouth.x, mouth.y, mouthLevel * 1.4); breathClock = 0;
     }
   } else breathClock = 0;
   for (const cloud of demoClouds) {
@@ -121,7 +123,8 @@ $('start').onclick = async () => {
     stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'user', width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
     video.srcObject = stream; await video.play(); enter(); $('ambient').style.display = 'none';
     // The mirror starts clear: only exhalation deposits new condensation.
-    void enableHands(); await enableMic();
+    requestAnimationFrame(track);
+    void enableFace(); void enableHands();
   } catch {
     stream?.getTracks().forEach(t => t.stop()); stream = null;
     notice('카메라를 열 수 없어요. 권한을 허용하거나 체험 모드를 이용해 주세요.');
@@ -132,51 +135,23 @@ $('fog').onclick = addFog;
 $('wipe').onclick = () => { field.clear(); demoClouds = []; breathClock = 0; };
 $('help').onclick = () => $('guide').hidden = !$('guide').hidden;
 $('closeGuide').onclick = () => $('guide').hidden = true;
-async function enableMic() {
-  if (audioContext) { await audioContext.resume(); return; }
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false}});
-    audioContext = new AudioContext(); await audioContext.resume();
-    const source = audioContext.createMediaStreamSource(micStream), analyser = audioContext.createAnalyser();
-    analyser.fftSize = 2048; analyser.smoothingTimeConstant = .35; source.connect(analyser);
-    const samples = new Float32Array(analyser.fftSize), bins = new Float32Array(analyser.frequencyBinCount);
-    const envelope = new BreathEnvelope(); let previous = performance.now(), calibrating = .6;
-    const detect = now => {
-      if (!audioContext || audioContext.state === 'closed') return;
-      const dt = Math.min(.1, (now - previous) / 1000); previous = now;
-      if (audioContext.state === 'running') {
-        analyser.getFloatTimeDomainData(samples); analyser.getFloatFrequencyData(bins);
-        let sum = 0; for (const v of samples) sum += v * v;
-        const rms = Math.sqrt(sum / samples.length);
-        // Spectral flatness from 150–6000 Hz suppresses strongly tonal sounds.
-        const lo = Math.max(1, Math.ceil(150 * analyser.fftSize / audioContext.sampleRate));
-        const hi = Math.min(bins.length, Math.floor(6000 * analyser.fftSize / audioContext.sampleRate));
-        let linear = 0, logs = 0;
-        for (let i = lo; i < hi; i++) { const power = Math.max(1e-12, 10 ** (bins[i] / 10)); linear += power; logs += Math.log(power); }
-        const count = Math.max(1, hi - lo), flatness = Math.exp(logs / count) / Math.max(1e-12, linear / count);
-        calibrating -= dt;
-        if (calibrating > 0) { envelope.noise = Math.max(.002, rms); audioLevel = 0; }
-        else audioLevel = envelope.update(rms, flatness, dt);
-        if (audioLevel > .12) $('hint').textContent = '입김이 유리에 번지고 있어요';
-      } else audioLevel = 0;
-      requestAnimationFrame(detect);
-    };
-    requestAnimationFrame(detect); setMicLabel(true);
-  } catch {
-    micStream?.getTracks().forEach(t => t.stop());
-    if (audioContext) { await audioContext.close().catch(() => {}); audioContext = null; }
-    notice('마이크를 사용할 수 없어요. ‘김 서리기’ 버튼으로도 사용할 수 있어요.');
-  }
+function setMouthLabel() {
+  $('mouth').setAttribute('aria-pressed', String(mouthEnabled));
+  $('mouth').querySelector('span').textContent = mouthEnabled ? '입모양 켜짐' : '입모양 꺼짐';
 }
-function setMicLabel(on) {
-  $('sound').setAttribute('aria-pressed', String(on));
-  $('sound').querySelector('span').textContent = on ? '입김 켜짐' : '입김 꺼짐';
-}
-$('sound').onclick = async () => {
-  if (!audioContext) { await enableMic(); return; }
-  if (audioContext.state === 'running') { await audioContext.suspend(); audioLevel = 0; setMicLabel(false); }
-  else { await audioContext.resume(); setMicLabel(true); }
+$('mouth').onclick = async () => {
+  if (!stream) { notice('입모양 감지는 카메라 모드에서 사용할 수 있어요.'); return; }
+  if (!faceTracker) { await enableFace(); return; }
+  mouthEnabled = !mouthEnabled; mouthGesture.reset(); mouthLevel = 0;
+  mouth = null; breathClock = 0; setMouthLabel();
 };
+async function getVision() {
+  if (!visionPromise) visionPromise = (async () => {
+    visionModule = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/+esm');
+    visionFiles = await visionModule.FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm');
+  })().catch(error => { visionPromise = null; throw error; });
+  await visionPromise;
+}
 function position(point) {
   const vw = video.videoWidth, vh = video.videoHeight, scale = Math.max(width / vw, height / vh);
   return {x: width - (point.x * vw * scale + (width - vw * scale) / 2), y: point.y * vh * scale + (height - vh * scale) / 2};
@@ -187,25 +162,32 @@ async function enableHands() {
   if ($('hands').disabled) return;
   $('hands').disabled = true; $('hands').querySelector('span').textContent = '손 추적 준비 중';
   try {
-    visionModule = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/+esm');
-    visionFiles = await visionModule.FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm');
+    await getVision();
     handTracker = await visionModule.HandLandmarker.createFromOptions(visionFiles, {
       baseOptions: {modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},
       runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: .55, minTrackingConfidence: .55
     });
-    handEnabled = true; setHands(); requestAnimationFrame(track);
-    // A separate, lower-rate face detector locates the mouth without uploading video.
-    void enableFace();
+    handEnabled = true; setHands();
   } catch { notice('손 추적을 불러오지 못했어요. 화면을 직접 문질러 사용할 수 있어요.'); $('hands').querySelector('span').textContent = '손 추적 다시 시도'; }
   finally { $('hands').disabled = false; }
 }
 async function enableFace() {
+  if ($('mouth').disabled) return;
+  $('mouth').disabled = true; $('mouth').querySelector('span').textContent = '입모양 준비 중';
   try {
-    faceTracker = await visionModule.FaceDetector.createFromOptions(visionFiles, {
-      baseOptions: {modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite'},
-      runningMode: 'VIDEO', minDetectionConfidence: .6
+    await getVision();
+    faceTracker = await visionModule.FaceLandmarker.createFromOptions(visionFiles, {
+      baseOptions: {modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task'},
+      runningMode: 'VIDEO', numFaces: 1, outputFaceBlendshapes: true,
+      minFaceDetectionConfidence: .55, minFacePresenceConfidence: .55, minTrackingConfidence: .55
     });
-  } catch { /* If unavailable, exhalations originate near the center of the mirror. */ }
+    mouthEnabled = true; setMouthLabel();
+    $('hint').textContent = '입술을 오므려 후— 하는 모양을 해보세요';
+  } catch {
+    mouthEnabled = false; mouthLevel = 0; mouth = null; mouthGesture.reset();
+    $('mouth').querySelector('span').textContent = '입모양 다시 시도';
+    notice('입모양 감지를 불러오지 못했어요. ‘김 서리기’ 버튼으로 사용할 수 있어요.');
+  } finally { $('mouth').disabled = false; }
 }
 function setHands() {
   $('hands').setAttribute('aria-pressed', String(handEnabled));
@@ -232,16 +214,32 @@ function wipePalm(points, previous) {
 }
 function track(t) {
   requestAnimationFrame(track);
-  if (!handEnabled || video.readyState < 2 || t - lastFrame < 50 || video.currentTime === track.lastVideoTime) return;
+  if (video.readyState < 2 || video.currentTime === track.lastVideoTime) return;
+  if (t - lastFrame < 50) return;
   lastFrame = t; track.lastVideoTime = video.currentTime;
-  if (faceTracker && t - lastFaceFrame > 200) {
-    lastFaceFrame = t;
+  if (mouthEnabled && faceTracker && t - lastFaceFrame > 80) {
+    const dt = Math.min(.12, (t - lastFaceFrame) / 1000); lastFaceFrame = t;
     try {
-      const faces = faceTracker.detectForVideo(video, t).detections;
-      const lip = faces?.[0]?.keypoints?.[3];
-      if (lip) { const next = position(lip); mouth = mouth ? mixPoint(mouth, next, .32) : next; mouthSeen = t; }
-    } catch { faceTracker.close(); faceTracker = null; }
+      const result = faceTracker.detectForVideo(video, t);
+      const shape = lipShape(result.faceLandmarks?.[0], result.faceBlendshapes?.[0]?.categories,
+        video.videoWidth, video.videoHeight);
+      mouthLevel = mouthGesture.update(shape, dt);
+      if (shape) {
+        const next = position(shape.center);
+        mouth = mouth && t - mouthSeen < 220 ? mixPoint(mouth, next, .75) : next;
+        mouthSeen = t;
+        if (mouthLevel > .1) $('hint').textContent = '입 주변에서 김이 퍼지고 있어요';
+      } else {
+        mouth = null; mouthLevel = 0; breathClock = 0;
+        $('hint').textContent = '카메라에 얼굴과 입이 보이게 해주세요';
+      }
+    } catch {
+      faceTracker.close(); faceTracker = null; mouthEnabled = false; mouthLevel = 0;
+      mouth = null; mouthGesture.reset(); setMouthLabel();
+      notice('입모양 감지가 중단되었어요. 입모양 버튼을 눌러 다시 시도해 주세요.');
+    }
   }
+  if (!handEnabled || !handTracker) return;
   try {
     const hand = handTracker.detectForVideo(video, t).landmarks?.[0];
     if (!hand) { lastHand = null; latestHand = null; return; }
@@ -261,6 +259,6 @@ function track(t) {
 }
 $('hands').onclick = enableHands;
 addEventListener('pagehide', () => {
-  stream?.getTracks().forEach(t => t.stop()); micStream?.getTracks().forEach(t => t.stop());
-  audioContext?.close(); handTracker?.close(); faceTracker?.close();
+  stream?.getTracks().forEach(t => t.stop());
+  handTracker?.close(); faceTracker?.close();
 });

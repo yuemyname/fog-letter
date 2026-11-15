@@ -42,7 +42,7 @@ export class Condensation {
       cloud.age += dt;
       if (cloud.age > 1.35) continue;
       const progress = cloud.age / 1.35;
-      const radius = Math.min(this.width * .42, this.height * .34) * (.32 + .95 * Math.sqrt(progress));
+      const radius = Math.min(this.width * .42, this.height * .34) * (.025 + 1.25 * progress ** .65);
       const fade = Math.sin(Math.PI * Math.min(1, progress * 1.1));
       this.deposit(cloud.x + Math.sin(cloud.seed + progress * 2) * radius * .07,
         cloud.y - radius * progress * .23, radius, radius * .7,
@@ -105,20 +105,5 @@ export class Condensation {
       rgba[i * 4] = 255; rgba[i * 4 + 1] = 255; rgba[i * 4 + 2] = 255;
       rgba[i * 4 + 3] = Math.round(clamp(alpha, 0, .97) * 255);
     }
-  }
-}
-
-// Sustained airflow has a broad spectrum; speech tends to have stronger peaks.
-export class BreathEnvelope {
-  constructor() { this.noise = .008; this.level = 0; this.duration = 0; }
-  update(rms, flatness, dt) {
-    dt = clamp(dt, 0, .1);
-    const threshold = Math.max(.013, this.noise * 2.3);
-    const candidate = rms > threshold && flatness > .12;
-    this.duration = candidate ? this.duration + dt : Math.max(0, this.duration - dt * 3);
-    if (!candidate) this.noise += (rms - this.noise) * (1 - Math.exp(-dt * .7));
-    const target = candidate && this.duration > .12 ? clamp((rms - threshold) * 14, .2, 1.5) : 0;
-    this.level += (target - this.level) * (1 - Math.exp(-dt * (target > this.level ? 10 : 4)));
-    return this.level;
   }
 }
