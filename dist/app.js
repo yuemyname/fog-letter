@@ -13,7 +13,7 @@ const mouthGesture = new MouthGesture();
 const handGesture = new HandGesture();
 let handEnabled = false, lastHand = null, lastFrame = 0, lastFaceFrame = 0;
 let lastDraw = 0, noticeTimer, pointer = null, breathClock = 0, demoClouds = [];
-let mouth = null, mouthSeen = 0, latestHand = null;
+let mouth = null, mouthSeen = 0, latestHand = null, handPreview = null;
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const mixPoint = (a, b, k) => ({x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k});
 function notice(text) {
@@ -109,9 +109,14 @@ function render(t) {
   ctx.imageSmoothingEnabled = true; ctx.drawImage(mask, 0, 0, width, height); ctx.restore();
   // Only writing shows a fingertip cursor; a fist uses the wider wiping contact.
   pen.clearRect(0, 0, width, height);
-  if (latestHand && t - latestHand.time < 160 && latestHand.mode === 'write') {
-    pen.beginPath(); pen.arc(latestHand.point.x, latestHand.point.y, 3, 0, Math.PI * 2);
-    pen.fillStyle = '#ffffff88'; pen.fill();
+  if (handEnabled && handPreview && t - handPreview.time < 200) {
+    const thumb = handPreview.points[4], index = handPreview.points[8];
+    const writing = latestHand?.mode === 'write' && t - latestHand.time < 160;
+    pen.strokeStyle = writing ? '#b9f9d5dd' : '#ffffffaa'; pen.lineWidth = 1.5;
+    pen.beginPath(); pen.moveTo(thumb.x, thumb.y); pen.lineTo(index.x, index.y); pen.stroke();
+    for (const point of [thumb, index]) {
+      pen.beginPath(); pen.arc(point.x, point.y, writing ? 5 : 7, 0, Math.PI * 2); pen.stroke();
+    }
   }
 }
 requestAnimationFrame(render);
@@ -164,14 +169,15 @@ async function enableHands() {
   if (handTracker) { handEnabled = !handEnabled; setHands(); return; }
   if ($('hands').disabled) return;
   $('hands').disabled = true; $('hands').querySelector('span').textContent = '손 추적 준비 중';
+  $('handStatus').textContent = '손 인식 모델을 불러오고 있어요';
   try {
     await getVision();
     handTracker = await visionModule.HandLandmarker.createFromOptions(visionFiles, {
       baseOptions: {modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},
-      runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: .55, minTrackingConfidence: .55
+      runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: .4, minHandPresenceConfidence: .4, minTrackingConfidence: .4
     });
     handEnabled = true; setHands();
-  } catch { notice('손 추적을 불러오지 못했어요. 화면을 직접 문질러 사용할 수 있어요.'); $('hands').querySelector('span').textContent = '손 추적 다시 시도'; }
+  } catch { notice('손 추적을 불러오지 못했어요. 화면을 직접 문질러 사용할 수 있어요.'); $('hands').querySelector('span').textContent = '손 추적 다시 시도'; $('handStatus').textContent = '손 추적을 불러오지 못했어요 · 다시 시도해 주세요'; }
   finally { $('hands').disabled = false; }
 }
 async function enableFace() {
@@ -195,7 +201,8 @@ async function enableFace() {
 function setHands() {
   $('hands').setAttribute('aria-pressed', String(handEnabled));
   $('hands').querySelector('span').textContent = handEnabled ? '손 추적 켜짐' : '손 추적 꺼짐';
-  lastHand = null; latestHand = null; handGesture.reset(); pen.clearRect(0, 0, width, height);
+  $('handStatus').textContent = handEnabled ? '손 전체를 카메라에 보여주세요' : '손 추적 꺼짐';
+  handPreview = null; lastHand = null; latestHand = null; handGesture.reset(); pen.clearRect(0, 0, width, height);
 }
 function wipeFist(points, previous) {
   const center = {x: (points[0].x + points[5].x + points[9].x + points[13].x + points[17].x) / 5,
@@ -235,11 +242,16 @@ function track(t) {
   if (!handEnabled || !handTracker) return;
   try {
     const hand = handTracker.detectForVideo(video, t).landmarks?.[0];
-    if (!hand) { lastHand = null; latestHand = null; handGesture.reset(); return; }
+    if (!hand) {
+      lastHand = null; latestHand = null; handPreview = null; handGesture.reset();
+      $('handStatus').textContent = '손이 보이지 않아요 · 손 전체를 카메라에 보여주세요';
+      return;
+    }
+    handPreview = {points: hand.map(position), time: t};
     const mode = handGesture.update(handMode(hand, video.videoWidth, video.videoHeight, handGesture.candidate === 'write'), t);
     if (mode === 'none') {
       lastHand = null; latestHand = null;
-      $('hint').textContent = '엄지·검지를 붙이면 글씨 · 주먹을 쥐면 닦기';
+      $('handStatus').textContent = handGesture.candidate === 'write' ? '집기 인식 중…' : '손 인식됨 · 엄지와 검지 끝을 붙여주세요';
       return;
     }
     let points = hand.map(position), point = mode === 'erase' ? points[9] : writingPoint(points);
@@ -253,7 +265,7 @@ function track(t) {
       erase(previous ? previous.point : point, point, radius);
     }
     lastHand = {points, point, center, mode, time: t}; latestHand = lastHand;
-    $('hint').textContent = mode === 'erase' ? '주먹으로 유리를 닦고 있어요' : '엄지·검지를 붙여 유리 위에 쓰고 있어요';
+    $('handStatus').textContent = mode === 'erase' ? '주먹 인식 · 지우는 중' : '집기 인식 · 글씨 쓰는 중';
   } catch { handEnabled = false; setHands(); notice('손 추적이 중단되었어요. 화면을 직접 문질러 주세요.'); }
 }
 $('hands').onclick = enableHands;

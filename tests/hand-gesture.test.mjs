@@ -16,7 +16,7 @@ function pose(extended, {angle = 0, width = 1280, height = 720, mirror = false} 
 function pinch(options = {}, gapRatio = .08) {
   const hand = pose([true, false, false, false], options);
   const width = options.width || 1280;
-  hand[4] = {...hand[8], z: (hand[8].z || 0) + 90 * gapRatio / width};
+  hand[4] = {...hand[8], x: hand[8].x + 90 * gapRatio / width};
   return hand;
 }
 test('pinched thumb and index write; a lone pointed index does nothing', () => {
@@ -24,9 +24,9 @@ test('pinched thumb and index write; a lone pointed index does nothing', () => {
   assert.equal(handMode(pose([true, false, false, false]), 1280, 720), 'none');
 });
 test('pinch hysteresis tolerates small jitter but stops after release', () => {
-  assert.equal(handMode(pinch({}, .27), 1280, 720, false), 'none');
-  assert.equal(handMode(pinch({}, .27), 1280, 720, true), 'write');
-  assert.equal(handMode(pinch({}, .4), 1280, 720, true), 'none');
+  assert.equal(handMode(pinch({}, .4), 1280, 720, false), 'none');
+  assert.equal(handMode(pinch({}, .4), 1280, 720, true), 'write');
+  assert.equal(handMode(pinch({}, .6), 1280, 720, true), 'none');
 });
 test('contact point is between the two fingertips', () => {
   const points = Array.from({length:21}, () => ({x:0,y:0}));
@@ -67,4 +67,14 @@ test('brief accidental fists do not erase and changing modes stops immediately',
   assert.equal(gesture.update('erase', 800), 'erase');
   assert.equal(gesture.update('none', 850), 'none');
   assert.equal(gesture.update('erase', 900), 'none');
+});
+
+test('a naturally bent pinching index near the palm is accepted', () => {
+  const hand = pose([false,false,false,false]);
+  hand[8].x -= 40 / 1280; hand[4] = {...hand[8]};
+  assert.equal(handMode(hand,1280,720), 'write');
+});
+test('overlapping fingertips still pinch with noisy depth estimates', () => {
+  const hand = pinch(); hand[4].z = .12;
+  assert.equal(handMode(hand,1280,720), 'write');
 });

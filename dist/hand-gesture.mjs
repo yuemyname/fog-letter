@@ -19,12 +19,15 @@ export function handMode(landmarks, width, height, wasPinching = false) {
     return {extended: angle > 150 && endAngle > 145 && reach > 1.08,
       folded: angle < 140 && reach < 1.08};
   });
-  const span = distance(points[5], points[17]);
-  const pinchGap = distance(points[4], points[8]) / span;
-  // Keep a closed fist from becoming a pinch when its thumb rests on the index.
-  const indexRaised = distance(points[8], points[0]) > distance(points[5], points[0]) * 1.12;
-  const touching = pinchGap < (wasPinching ? .32 : .22);
-  if (touching && indexRaised) return 'write';
+  // Depth estimates become noisy when fingertips overlap; judge contact in the camera plane.
+  const screenDistance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const span = Math.max(screenDistance(points[5], points[17]), screenDistance(points[0], points[9]) * .8);
+  const pinchGap = screenDistance(points[4], points[8]) / span;
+  const touching = pinchGap < (wasPinching ? .5 : .35);
+  // A curved index is valid. Reject only the clustered fingertips of a closed fist.
+  const indexSeparate = screenDistance(points[8], points[12]) / span > .42;
+  const fist = fingers.every(f => f.folded);
+  if (touching && (!fist || indexSeparate)) return 'write';
   if (fingers.every(f => f.folded)) return 'erase';
   return 'none';
 }
